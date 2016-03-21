@@ -4,7 +4,6 @@
 package counts
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,7 +16,7 @@ import (
 	"github.com/giulioungaretti/geo/s2"
 	"github.com/giulioungaretti/globo/geoJSON"
 	// use postgres driver
-	_ "github.com/giulioungaretti/pq"
+	"github.com/jackc/pgx"
 )
 
 const (
@@ -28,24 +27,21 @@ const (
 	Endpoint = "/v1/counts/"
 )
 
-type dbHelper struct {
-	db          *sql.DB
-	queryAll    *sql.Stmt
-	queryDealer *sql.Stmt
-}
-
+//var db *sql.DB
+var db *pgx.Conn
 var err error
-var db dbHelper
 
 type Row struct {
-	value  uint64
-	cellid uint64
+	Sum      int64
+	S2cellid uint64
+	temp     Uint64Numeric
 }
 
 func checker(c, t *uint64, done chan struct{}) {
 	for {
 		time.Sleep(10 * time.Microsecond)
-		if atomic.LoadUint64(c) == atomic.LoadUint64(t) {
+		log.Debugf("⚡️  %v, %v", *c, *t)
+		if *c == *t {
 			log.Debugf("⚡️  done")
 			close(done)
 			return
@@ -55,8 +51,8 @@ func checker(c, t *uint64, done chan struct{}) {
 
 func processor(ch chan Row, count, processed *uint64, loop s2.Loop, bound s2.Rect) {
 	for row := range ch {
-		if containsCell(loop, bound, row.cellid) {
-			atomic.AddUint64(count, row.value)
+		if containsCell(loop, bound, row.S2cellid) {
+			atomic.AddUint64(count, uint64(row.Sum))
 		}
 		atomic.AddUint64(processed, 1)
 	}
@@ -69,35 +65,31 @@ func init() {
 	}
 }
 
-func connect() (db dbHelper, err error) {
-	dbinfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable",
-		dbUser, dbPassword, dbName)
-	dbo, err := sql.Open("postgres", dbinfo)
-	if err != nil {
+func connect() (db *pgx.Conn, err error) {
+	db, err = pgx.Connect(pgx.ConnConfig{
+		User:     "giulio",
+		Database: "postgres",
+	})
+	return db, err
+}
+
+func query(db *pgx.Conn, dealerID int, minID, maxID uint64, start string, end string) (rows *pgx.Rows, err error) {
+	if dealerID == 0 {
+		rows, err = db.Query(`
+	SELECT sum(count), s2cellid
+	FROM data
+	WHERE
+		daterange($1::date, $2::date, '[]')
+		@> day
+	AND
+		numrange($3, $4)
+		@>s2cellid
+	GROUP BY
+		s2cellid
+	`, start, end, minID, maxID)
 		return
 	}
-	err = dbo.Ping()
-	if err != nil {
-		return
-	}
-	db.db = dbo
-	stmt, err := dbo.Prepare(`
-			SELECT sum(count), s2cellid
-			FROM data
-			WHERE
-				daterange($1::date, $2::date, '[]')
-				@> day
-			AND
-				numrange($3, $4)
-				@>s2cellid
-			GROUP BY
-				s2cellid
-	`)
-	if err != nil {
-		return
-	}
-	db.queryAll = stmt
-	stmt, err = dbo.Prepare(`
+	rows, err = db.Query(`
 	SELECT sum(count), s2cellid
 	FROM data
 	WHERE dealer = $1
@@ -109,20 +101,7 @@ func connect() (db dbHelper, err error) {
 		@>s2cellid
 	GROUP BY
 		s2cellid
-	`)
-	if err != nil {
-		return
-	}
-	db.queryDealer = stmt
-	return
-}
-
-func query(db dbHelper, dealerID int, minID, maxID uint64, start string, end string) (rows *sql.Rows, err error) {
-	if dealerID == 0 {
-		rows, err = db.queryAll.Query(start, end, minID, maxID)
-		return rows, err
-	}
-	rows, err = db.queryDealer.Query(dealerID, start, end, minID, maxID)
+	`, dealerID, start, end, minID, maxID)
 	return
 }
 
@@ -170,6 +149,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing end date", http.StatusBadRequest)
 	}
 
+	log.Print("heres")
 	// match geoJSON type
 	resp, err := Matcher(r)
 	if err != nil {
@@ -184,7 +164,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
 	results := make(map[string]uint64)
 	t := time.Now()
 loop:
@@ -209,26 +188,28 @@ loop:
 		ch := make(chan Row, 1000)
 		done := make(chan struct{})
 
+		go checker(&processed, &rowsnumber, done)
 		for i := 0; i < workers; i++ {
 			go processor(ch, &count, &processed, loop, bound)
 		}
+
 		for rows.Next() {
 			var row Row
-			if err := rows.Scan(&row.value, &row.cellid); err != nil {
-				log.Error(err)
+			if err := rows.Scan(&row.Sum, &row.temp); err != nil {
+				log.Fatal(err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				break loop
 			} else {
+				row.S2cellid = uint64(row.temp)
 				ch <- row
 				atomic.AddUint64(&rowsnumber, 1)
 			}
 		}
-		go checker(&processed, &rowsnumber, done)
-		log.Debugf("🚥")
 		<-done
+		log.Debugf("🚥")
 		results[fmt.Sprint(i)] = count
 		log.Debugf("total row recieved:%v", rowsnumber)
-		log.Debugf("total  recieved:%v", results)
+		//log.Debugf("total  recieved:%v", results)
 	}
 	log.Debug(time.Since(t))
 	encoder := json.NewEncoder(w)
