@@ -17,7 +17,7 @@ import (
 	"github.com/giulioungaretti/geo/s2"
 	"github.com/giulioungaretti/globo/geoJSON"
 	// use postgres driver
-	_ "github.com/lib/pq"
+	_ "github.com/giulioungaretti/pq"
 )
 
 const (
@@ -28,8 +28,14 @@ const (
 	Endpoint = "/v1/counts/"
 )
 
-var db *sql.DB
+type dbHelper struct {
+	db          *sql.DB
+	queryAll    *sql.Stmt
+	queryDealer *sql.Stmt
+}
+
 var err error
+var db dbHelper
 
 type Row struct {
 	value  uint64
@@ -39,8 +45,7 @@ type Row struct {
 func checker(c, t *uint64, done chan struct{}) {
 	for {
 		time.Sleep(10 * time.Microsecond)
-		log.Debugf("⚡️  %v, %v", *c, *t)
-		if *c == *t {
+		if atomic.LoadUint64(c) == atomic.LoadUint64(t) {
 			log.Debugf("⚡️  done")
 			close(done)
 			return
@@ -64,37 +69,35 @@ func init() {
 	}
 }
 
-func connect() (db *sql.DB, err error) {
+func connect() (db dbHelper, err error) {
 	dbinfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable",
 		dbUser, dbPassword, dbName)
-	db, err = sql.Open("postgres", dbinfo)
+	dbo, err := sql.Open("postgres", dbinfo)
 	if err != nil {
 		return
 	}
-	err = db.Ping()
+	err = dbo.Ping()
 	if err != nil {
 		return
 	}
-	return
-}
-
-func query(db *sql.DB, dealerID int, minID, maxID uint64, start string, end string) (rows *sql.Rows, err error) {
-	if dealerID == 0 {
-		rows, err = db.Query(`
-	SELECT sum(count), s2cellid
-	FROM data
-	WHERE
-		daterange($1::date, $2::date, '[]')
-		@> day
-	AND
-		numrange($3, $4)
-		@>s2cellid
-	GROUP BY
-		s2cellid
-	`, start, end, minID, maxID)
+	db.db = dbo
+	stmt, err := dbo.Prepare(`
+			SELECT sum(count), s2cellid
+			FROM data
+			WHERE
+				daterange($1::date, $2::date, '[]')
+				@> day
+			AND
+				numrange($3, $4)
+				@>s2cellid
+			GROUP BY
+				s2cellid
+	`)
+	if err != nil {
 		return
 	}
-	rows, err = db.Query(`
+	db.queryAll = stmt
+	stmt, err = dbo.Prepare(`
 	SELECT sum(count), s2cellid
 	FROM data
 	WHERE dealer = $1
@@ -106,7 +109,20 @@ func query(db *sql.DB, dealerID int, minID, maxID uint64, start string, end stri
 		@>s2cellid
 	GROUP BY
 		s2cellid
-	`, dealerID, start, end, minID, maxID)
+	`)
+	if err != nil {
+		return
+	}
+	db.queryDealer = stmt
+	return
+}
+
+func query(db dbHelper, dealerID int, minID, maxID uint64, start string, end string) (rows *sql.Rows, err error) {
+	if dealerID == 0 {
+		rows, err = db.queryAll.Query(start, end, minID, maxID)
+		return rows, err
+	}
+	rows, err = db.queryDealer.Query(dealerID, start, end, minID, maxID)
 	return
 }
 
@@ -193,11 +209,9 @@ loop:
 		ch := make(chan Row, 1000)
 		done := make(chan struct{})
 
-		go checker(&processed, &rowsnumber, done)
 		for i := 0; i < workers; i++ {
 			go processor(ch, &count, &processed, loop, bound)
 		}
-
 		for rows.Next() {
 			var row Row
 			if err := rows.Scan(&row.value, &row.cellid); err != nil {
@@ -209,8 +223,9 @@ loop:
 				atomic.AddUint64(&rowsnumber, 1)
 			}
 		}
-		<-done
+		go checker(&processed, &rowsnumber, done)
 		log.Debugf("🚥")
+		<-done
 		results[fmt.Sprint(i)] = count
 		log.Debugf("total row recieved:%v", rowsnumber)
 		log.Debugf("total  recieved:%v", results)
