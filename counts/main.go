@@ -37,7 +37,7 @@ type dbHelper struct {
 var err error
 var db dbHelper
 
-type Row struct {
+type row struct {
 	value  uint64
 	cellid uint64
 }
@@ -53,7 +53,7 @@ func checker(c, t *uint64, done chan struct{}) {
 	}
 }
 
-func processor(ch chan Row, count, processed *uint64, loop s2.Loop, bound s2.Rect) {
+func processor(ch chan row, count, processed *uint64, loop s2.Loop, bound s2.Rect) {
 	for row := range ch {
 		if containsCell(loop, bound, row.cellid) {
 			atomic.AddUint64(count, row.value)
@@ -151,14 +151,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		// set max precision
 		precision = 30
 	}
-	if dealers, ok := values["dealer"]; ok {
-		dealer, err = strconv.Atoi(dealers[0])
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-		}
-	} else {
-		http.Error(w, "Missing dealer", http.StatusBadRequest)
-	}
 	if starts, ok := values["start"]; ok {
 		start = starts[0]
 	} else {
@@ -206,14 +198,14 @@ loop:
 		// channels
 		var processed uint64
 		var count uint64
-		ch := make(chan Row, 1000)
+		ch := make(chan row, 1000)
 		done := make(chan struct{})
 
 		for i := 0; i < workers; i++ {
 			go processor(ch, &count, &processed, loop, bound)
 		}
 		for rows.Next() {
-			var row Row
+			var row row
 			if err := rows.Scan(&row.value, &row.cellid); err != nil {
 				log.Error(err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
