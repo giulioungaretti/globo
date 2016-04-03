@@ -48,9 +48,9 @@ func checker(c, t *uint64, done chan struct{}) {
 	}
 }
 
-func processor(ch chan row, count, processed *uint64, loop s2.Loop, bound s2.Rect) {
+func processor(ch chan row, count, processed *uint64, cu s2.CellUnion) {
 	for row := range ch {
-		if containsCell(loop, bound, row.cellid) {
+		if containsCell(cu, row.cellid) {
 			atomic.AddUint64(count, row.value)
 		}
 		atomic.AddUint64(processed, 1)
@@ -128,7 +128,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		http.Error(w, "Missing end date", http.StatusBadRequest)
 	}
-
 	// match geoJSON type
 	resp, err := geoJSON.Matcher(r, Endpoint)
 	if err != nil {
@@ -137,8 +136,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// get data from geojson
-	cellUnions, loops, err := resp.ToS2(precision)
-	return
+	cellUnions, err := resp.ToCu(precision)
 	if err != nil {
 		log.Error(err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -149,8 +147,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	t := time.Now()
 loop:
 	for i, ids := range cellUnions {
-		min := ids[0]
-		max := ids[len(ids)-1]
+		min := uint64(ids[0])
+		max := uint64(ids[len(ids)-1])
 		rows, err := query(db, min, max, start, end)
 		if err != nil {
 			log.Error(err)
@@ -160,9 +158,6 @@ loop:
 		}
 		var rowsnumber uint64
 		// get loop
-		loop := loops[i]
-		// get bound
-		bound := loop.RectBound()
 		// channels
 		var processed uint64
 		var count uint64
@@ -171,7 +166,7 @@ loop:
 
 		go checker(&processed, &rowsnumber, done)
 		for i := 0; i < workers; i++ {
-			go processor(ch, &count, &processed, loop, bound)
+			go processor(ch, &count, &processed, ids)
 		}
 
 		for rows.Next() {
@@ -202,18 +197,8 @@ loop:
 	}
 }
 
-func containsCell(l s2.Loop, bound s2.Rect, cellid uint64) (res bool) {
-	// fast check: if cell not in bounding rect
-	// return false
+func containsCell(cu s2.CellUnion, cellid uint64) (res bool) {
 	id := s2.CellID(cellid)
-	cell := s2.CellFromCellID(id)
-	cellBound := cell.RectBound()
-	if !bound.Contains(cellBound) {
-		return false
-	}
-	ll := id.LatLng()
-	if l.ContainsPoint(s2.PointFromLatLng(ll)) {
-		return true
-	}
+	res = cu.ContainsCellID(id)
 	return res
 }
