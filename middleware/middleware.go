@@ -15,6 +15,16 @@ func TimeOut(next http.Handler) http.Handler {
 	return http.TimeoutHandler(next, 1*time.Second, "timed out")
 }
 
+// X make sure that we get the request as tpye json
+func X(next http.Handler) http.Handler {
+	hanlderfunc := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// allow x-origin
+		next.ServeHTTP(w, r)
+	}
+	return http.HandlerFunc(hanlderfunc)
+}
+
 // IsJSON make sure that we get the request as tpye json
 func IsJSON(next http.Handler) http.Handler {
 	hanlderfunc := func(w http.ResponseWriter, r *http.Request) {

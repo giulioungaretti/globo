@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	defaultMiddleware := alice.New(middleware.TimeOut, middleware.IsJSON, middleware.PostOnly)
+	defaultMiddleware := alice.New(middleware.X, middleware.TimeOut, middleware.IsJSON, middleware.PostOnly)
 
 	// point
 	pointHandler := http.HandlerFunc(point.Handler)
