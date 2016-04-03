@@ -8,13 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"runtime"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/giulioungaretti/geo/s2"
 	"github.com/giulioungaretti/globo/geoJSON"
 	// use postgres driver
 	_ "github.com/lib/pq"
@@ -48,15 +45,6 @@ func checker(c, t *uint64, done chan struct{}) {
 	}
 }
 
-func processor(ch chan row, count, processed *uint64, loop s2.Loop, bound s2.Rect) {
-	for row := range ch {
-		if containsCell(loop, bound, row.cellid) {
-			atomic.AddUint64(count, row.value)
-		}
-		atomic.AddUint64(processed, 1)
-	}
-}
-
 func init() {
 	db, err = connect()
 	if err != nil {
@@ -78,9 +66,9 @@ func connect() (db *sql.DB, err error) {
 	return
 }
 
-func query(db *sql.DB, minID, maxID uint64, start string, end string) (rows *sql.Rows, err error) {
-	rows, err = db.Query(`
-	SELECT sum(count), s2cellid
+func query(db *sql.DB, minID, maxID uint64, start string, end string) (row *sql.Row) {
+	row = db.QueryRow(`
+	SELECT sum(count)
 	FROM data
 	WHERE
 		daterange($1::date, $2::date, '[]')
@@ -88,8 +76,6 @@ func query(db *sql.DB, minID, maxID uint64, start string, end string) (rows *sql
 	AND
 		numrange($3, $4)
 		@>s2cellid
-	GROUP BY
-		s2cellid
 	`, start, end, minID, maxID)
 	return
 }
@@ -102,7 +88,6 @@ type res struct {
 //Handler takes care of the request
 func Handler(w http.ResponseWriter, r *http.Request) {
 
-	workers := runtime.NumCPU()
 	// parsq query
 	values := r.URL.Query()
 	var start string
@@ -137,8 +122,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// get data from geojson
-	cellUnions, loops, err := resp.ToS2(precision)
-	return
+	cellUnions, _, err := resp.ToS2(precision)
 	if err != nil {
 		log.Error(err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -147,49 +131,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	results := make(map[string]uint64)
 	t := time.Now()
-loop:
 	for i, ids := range cellUnions {
+		var count uint64
 		min := ids[0]
 		max := ids[len(ids)-1]
-		rows, err := query(db, min, max, start, end)
+		row := query(db, min, max, start, end)
+		err := row.Scan(&count)
 		if err != nil {
 			log.Error(err)
 			log.Debug(min, max, nil, start, end)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			continue
 		}
-		var rowsnumber uint64
-		// get loop
-		loop := loops[i]
-		// get bound
-		bound := loop.RectBound()
-		// channels
-		var processed uint64
-		var count uint64
-		ch := make(chan row, 1000)
-		done := make(chan struct{})
-
-		go checker(&processed, &rowsnumber, done)
-		for i := 0; i < workers; i++ {
-			go processor(ch, &count, &processed, loop, bound)
-		}
-
-		for rows.Next() {
-			var row row
-			if err := rows.Scan(&row.value, &row.cellid); err != nil {
-				log.Error(err)
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				break loop
-			} else {
-				ch <- row
-				atomic.AddUint64(&rowsnumber, 1)
-			}
-		}
-		<-done
-		log.Debugf("🚥")
 		results[fmt.Sprint(i)] = count
-		log.Debugf("total row recieved:%v", rowsnumber)
-		log.Debugf("total  recieved:%v", results)
 	}
 	log.Debug(time.Since(t))
 	encoder := json.NewEncoder(w)
@@ -200,20 +154,4 @@ loop:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-}
-
-func containsCell(l s2.Loop, bound s2.Rect, cellid uint64) (res bool) {
-	// fast check: if cell not in bounding rect
-	// return false
-	id := s2.CellID(cellid)
-	cell := s2.CellFromCellID(id)
-	cellBound := cell.RectBound()
-	if !bound.Contains(cellBound) {
-		return false
-	}
-	ll := id.LatLng()
-	if l.ContainsPoint(s2.PointFromLatLng(ll)) {
-		return true
-	}
-	return res
 }
