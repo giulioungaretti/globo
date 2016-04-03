@@ -42,6 +42,7 @@ func main() {
 		panic(err)
 	}
 	log.SetLevel(lvl)
+	//addr := fmt.Sprintf("10.0.1.3:%v", port)
 	addr := fmt.Sprintf(":%v", port)
 	log.Debugf(" 🌎  listening: %v 🌎  ", addr)
 	http.ListenAndServe(addr, nil)
