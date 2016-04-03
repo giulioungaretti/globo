@@ -78,6 +78,7 @@ type FeatureCollection struct {
 // GeoJSON is the interface that allows any geojson to be unmarshaled
 // converted to s2, and marhsaled back to be visualized
 type GeoJSON interface {
+	ToCu(int) ([]s2.CellUnion, error)
 	ToS2(int) ([][]uint64, []s2.Loop, error)
 	ToGeoJSON(int) (FeatureCollection, error)
 }
@@ -307,6 +308,22 @@ func loopCoverer(loop s2.Loop, precision int) ([]uint64, error) {
 	return boundary, fmt.Errorf("Can't cover region.")
 }
 
+func loopCoverer2(loop s2.Loop, precision int) (covering s2.CellUnion, err error) {
+	t := time.Now()
+	for i := precision; i < 30; i++ {
+		log.Debug("start creating covering")
+		rc := &s2.RegionCoverer{MinLevel: 0, MaxLevel: i, MaxCells: 500000}
+		covering = rc.InteriorCovering(s2.Region(loop))
+		log.Debugf("done creating covering in %v", time.Since(t))
+		// crude check to make sure we get enough covering
+		if len(covering) > 4 {
+			return covering, nil
+		}
+		log.Warnf("Need to upscale precision to %v", i+1)
+	}
+	return covering, fmt.Errorf("Can't cover region.")
+}
+
 // ToS2 converts a geoJSON polygon to a set of cellUnions
 func (p Polygon) ToS2(precision int) (ids [][]uint64, loops []s2.Loop, err error) {
 	var polygons [][]uint64
@@ -334,6 +351,32 @@ func (mp MultiPolygon) ToS2(precision int) (ids [][]uint64, loops []s2.Loop, err
 		polygons = append(polygons, polygon)
 	}
 	return polygons, loops, err
+}
+
+// ToCu converts a geoJSON multi polygon to a set of cellUnions
+func (p Polygon) ToCu(precision int) (cu []s2.CellUnion, err error) {
+	return
+}
+
+// ToCu converts a geoJSON multi polygon to a set of cellUnions
+func (p Point) ToCu(precision int) (cu []s2.CellUnion, err error) {
+	return
+}
+
+// ToCu converts a geoJSON multi polygon to a set of cellUnions
+func (mp MultiPolygon) ToCu(precision int) (cu []s2.CellUnion, err error) {
+	loops, err := mp.innerLoops()
+	if err != nil {
+		return cu, err
+	}
+	for _, loop := range loops {
+		c, err := loopCoverer2(loop, precision)
+		if err != nil {
+			return cu, err
+		}
+		cu = append(cu, c)
+	}
+	return cu, err
 }
 
 // ToGeoJSON converts polygon to geoJSON
