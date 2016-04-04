@@ -289,21 +289,18 @@ func boundingbox(loop s2.Loop, id int) (f Feature) {
 func loopCoverer(loop s2.Loop, precision int) ([]uint64, error) {
 	var boundary intArray
 	t := time.Now()
-	for i := precision; i < 30; i++ {
-		log.Debug("start creating covering")
-		rc := &s2.RegionCoverer{MinLevel: 0, MaxLevel: i, MaxCells: 500000}
-		covering := rc.InteriorCovering(s2.Region(loop))
-		log.Debugf("done creating covering in %v", time.Since(t))
-		// now approximate the polygon
-		for _, val := range covering {
-			boundary = append(boundary, uint64(val))
-		}
-		// crude check to make sure we get enough covering
-		if len(boundary) > 4 {
-			sort.Sort(boundary)
-			return boundary, nil
-		}
-		log.Warnf("Need to upscale precision to %v", i+1)
+	log.Debug("start creating covering")
+	rc := &s2.RegionCoverer{MinLevel: 0, MaxLevel: precision, MaxCells: 500}
+	covering := rc.InteriorCovering(loop)
+	log.Debugf("done creating covering in %v", time.Since(t))
+	// now approximate the polygon
+	for _, val := range covering {
+		boundary = append(boundary, uint64(val))
+	}
+	// crude check to make sure we get enough covering
+	if len(boundary) > 4 {
+		sort.Sort(boundary)
+		return boundary, nil
 	}
 	return boundary, fmt.Errorf("Can't cover region.")
 }
