@@ -290,7 +290,7 @@ func loopCoverer(loop s2.Loop, precision int) ([]uint64, error) {
 	t := time.Now()
 	log.Debug("start creating covering")
 	rc := &s2.RegionCoverer{MinLevel: 0, MaxLevel: precision, MaxCells: 500}
-	covering := rc.InteriorCovering(s2.Region(loop.RectBound()))
+	covering := rc.InteriorCovering(loop)
 	log.Debugf("done creating covering in %v", time.Since(t))
 	// now approximate the polygon
 	for _, val := range covering {
