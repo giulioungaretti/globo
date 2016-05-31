@@ -47,7 +47,7 @@ func checker(c, t *uint64, done chan struct{}) {
 	for {
 		time.Sleep(10 * time.Microsecond)
 		if atomic.LoadUint64(c) == atomic.LoadUint64(t) {
-			log.Debugf("⚡️  done")
+			//log.Debugf("⚡️  done")
 			close(done)
 			return
 		}
@@ -135,7 +135,8 @@ type res struct {
 //Handler takes care of the request
 func Handler(w http.ResponseWriter, r *http.Request) {
 
-	workers := runtime.NumCPU()
+	t0 := time.Now()
+	workers := runtime.NumCPU() * 10
 	// parsq query
 	values := r.URL.Query()
 	var start string
@@ -170,15 +171,16 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// get data from geojson
+	ff, _ := resp.ToGeoJSONFF()
 	cellUnions, err := resp.ToCu(precision)
 	if err != nil {
 		log.Error(err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	results := make(map[string]uint64)
+	log.Debugf("time to create cellids: %v", time.Since(t0))
 	t := time.Now()
+	log.Debug(len(cellUnions))
 loop:
 
 	for i, ids := range cellUnions {
@@ -196,7 +198,7 @@ loop:
 		// channels
 		var processed uint64
 		var count uint64
-		ch := make(chan row, 1000)
+		ch := make(chan row, 100000)
 		done := make(chan struct{})
 
 		for i := 0; i < workers; i++ {
@@ -214,22 +216,116 @@ loop:
 			}
 		}
 		go checker(&processed, &rowsnumber, done)
-		log.Debugf("🚥")
+		//log.Debugf("🚥")
 		<-done
-		results[fmt.Sprint(i)] = count
-		log.Debugf("total row recieved:%v", rowsnumber)
-		log.Debugf("total  recieved:%v", results)
-		log.Debugf("total  recieved:%v", atomic.LoadUint64(&privateConunter))
+		ff.AddFeatureProp(i, "count", count)
+		//log.Debugf("total row recieved:%v", rowsnumber)
+		//log.Debugf("total  recieved:%v", atomic.LoadUint64(&privateConunter))
 	}
-	log.Debug(time.Since(t))
+	log.Debugf("time to count points: %v", time.Since(t))
 	encoder := json.NewEncoder(w)
 	w.Header().Set("Content-Type", "application/json")
-	err = encoder.Encode(results)
+	err = encoder.Encode(ff)
 	if err != nil {
 		log.Error(err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Debugf("total: %v", time.Since(t0))
+}
+
+//HandlerSerial takes care of the request
+func HandlerSerial(w http.ResponseWriter, r *http.Request) {
+
+	t0 := time.Now()
+	// parsq query
+	values := r.URL.Query()
+	var start string
+	var ID int
+	var end string
+	var precision int
+	var err error
+	if p, ok := values["precision"]; ok {
+		precision, err = strconv.Atoi(p[0])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+	} else {
+		// set max precision
+		precision = 30
+	}
+	if starts, ok := values["start"]; ok {
+		start = starts[0]
+	} else {
+		http.Error(w, "Missing start date", http.StatusBadRequest)
+	}
+	if ends, ok := values["end"]; ok {
+		end = ends[0]
+	} else {
+		http.Error(w, "Missing end date", http.StatusBadRequest)
+	}
+	// match geoJSON type
+	resp, err := geoJSON.Matcher(r, Endpoint)
+	if err != nil {
+		log.Error(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// get data from geojson
+	ff, _ := resp.ToGeoJSONFF()
+	cellUnions, err := resp.ToCu(precision)
+	if err != nil {
+		log.Error(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Debugf("time to create cellids: %v", time.Since(t0))
+	t := time.Now()
+	log.Debug(len(cellUnions))
+loop:
+	for i, ids := range cellUnions {
+		min := uint64(ids[0])
+		max := uint64(ids[len(ids)-1])
+		rows, err := query(db, ID, min, max, start, end)
+		if err != nil {
+			log.Error(err)
+			log.Debug(ID, min, max, nil, start, end)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			continue
+		}
+		var count uint64
+		trow := time.Now()
+		for rows.Next() {
+			var row row
+			if err := rows.Scan(&row.value, &row.cellid); err != nil {
+				log.Error(err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				break loop
+			} else {
+				if containsCell(ids, row.cellid) {
+					atomic.AddUint64(&count, row.value)
+				}
+			}
+		}
+		ff.AddFeatureProp(i, "count", count)
+		dt := time.Since(trow)
+		if dt > 1*time.Millisecond {
+			log.Debugf("%v", dt)
+		}
+
+		//log.Debugf("total row recieved:%v", rowsnumber)
+		//log.Debugf("total  recieved:%v", atomic.LoadUint64(&privateConunter))
+	}
+	log.Debugf("time to count points: %v", time.Since(t))
+	encoder := json.NewEncoder(w)
+	w.Header().Set("Content-Type", "application/json")
+	err = encoder.Encode(ff)
+	if err != nil {
+		log.Error(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Debugf("total: %v", time.Since(t0))
 }
 
 func containsCell(cu s2.CellUnion, cellid uint64) (res bool) {
