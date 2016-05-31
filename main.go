@@ -33,8 +33,11 @@ func main() {
 	http.Handle("/contains", defaultMiddleware.Then(contains))
 
 	// query
-	count := http.HandlerFunc(counts.Handler)
+	count := http.HandlerFunc(counts.HandlerSerial)
 	http.Handle(counts.Endpoint, count)
+	// client handle
+	http.Handle("/", http.FileServer(http.Dir("./client")))
+
 	// server
 	port := os.Getenv("PORT")
 	lvl, err := ParseLogLevel(os.Getenv("LOGLEVEL"))
