@@ -36,7 +36,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// request
 	resp, err := Matcher(r, Endpoint)
 	if err != nil {
-		log.Error(err)
+		log.Errorf("error unmarshaling json %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -60,6 +60,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 // Matcher exctract from the url witch geoJSON object we want
 func Matcher(r *http.Request, Endpoint string) (p GeoJSON, err error) {
+	log.Debugf("url: %s", r.URL)
 	objectType := r.URL.Path[len(Endpoint):]
 	dec := json.NewDecoder(r.Body)
 	switch objectType {
@@ -67,23 +68,32 @@ func Matcher(r *http.Request, Endpoint string) (p GeoJSON, err error) {
 		// TODO this is ugly
 		pp := Point{}
 		err = dec.Decode(&pp)
+		if err != nil {
+			return
+		}
 		p = pp
 		if strings.ToLower(pp.Type) != "point" {
-			err = fmt.Errorf("%v not  a geoJSON point", pp.Type)
+			err = fmt.Errorf("type %v not  a geoJSON point", pp.Type)
 		}
 	case "polygon":
 		pp := Polygon{}
 		err = dec.Decode(&pp)
+		if err != nil {
+			return
+		}
 		p = pp
 		if strings.ToLower(pp.Type) != "polygon" {
-			err = fmt.Errorf("%v not  a geoJSON polygon", pp.Type)
+			err = fmt.Errorf("type %v not  a geoJSON polygon", pp.Type)
 		}
 	case "multipolygon":
 		pp := MultiPolygon{}
 		err = dec.Decode(&pp)
+		if err != nil {
+			return
+		}
 		p = pp
 		if strings.ToLower(pp.Type) != "multipolygon" {
-			err = fmt.Errorf("%v not a geoJSON multipolygon", pp.Type)
+			err = fmt.Errorf("type %v not a geoJSON multipolygon", pp.Type)
 		}
 	default:
 		err = fmt.Errorf("Bad geoJSON object type")
