@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
-	"time"
+	"sync"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/giulioungaretti/geo/s2"
 	"github.com/giulioungaretti/globo/point"
 )
+
+const bbox bool = false
 
 //Coordinate is a [longitude, latitude]
 type Coordinate [2]float64
@@ -72,6 +74,7 @@ type Feature struct {
 type FeatureCollection struct {
 	Type string    `json:"type"`
 	Feat []Feature `json:"features"`
+	mu   sync.RWMutex
 }
 
 // GeoJSON is the interface that allows any geojson to be unmarshaled
@@ -80,6 +83,7 @@ type GeoJSON interface {
 	ToCu(int) ([]s2.CellUnion, error)
 	ToS2(int) ([][]uint64, []s2.Loop, error)
 	ToGeoJSON(int) (FeatureCollection, error)
+	ToGeoJSONFF() (FeatureCollection, error)
 }
 
 func (c Coordinate) tos2point() s2.Point {
@@ -259,6 +263,10 @@ func cellIDToCenterPoint(id uint64) (f Feature) {
 	return f
 }
 
+func (f *Feature) addFeature(key string, value interface{}) {
+	f.Properties[key] = value
+}
+
 func boundingbox(loop s2.Loop, id int) (f Feature) {
 	rect := loop.RectBound()
 	var coordinates Coordinates
@@ -299,12 +307,12 @@ func loopCoverer(loop s2.Loop, precision int) ([]uint64, error) {
 }
 
 func loopCoverer2(loop s2.Loop, precision int) (covering s2.CellUnion, err error) {
-	t := time.Now()
+	//t := time.Now()
 	for i := precision - 1; i < 30; i++ {
-		log.Debug("start creating covering")
+		//log.Debug("start creating covering")
 		rc := &s2.RegionCoverer{MinLevel: 0, MaxLevel: i, MaxCells: 500}
 		covering = rc.InteriorCovering(s2.Region(loop))
-		log.Debugf("done creating covering in %v", time.Since(t))
+		//log.Debugf("done creating covering in %v", time.Since(t))
 		// crude check to make sure we get enough covering
 		if len(covering) > 4 {
 			return covering, nil
@@ -393,6 +401,44 @@ func (p Polygon) ToGeoJSON(precision int) (ff FeatureCollection, err error) {
 	return
 }
 
+// ToGeoJSONFF converts back a multipolygon to geoJSON
+func (p Polygon) ToGeoJSONFF() (ff FeatureCollection, err error) {
+	return ff, nil
+}
+
+// ToGeoJSONFF converts back a multipolygon to geoJSON
+func (p Point) ToGeoJSONFF() (ff FeatureCollection, err error) {
+	return ff, nil
+}
+
+// ToGeoJSONFF converts back a multipolygon to geoJSON
+func (mp MultiPolygon) ToGeoJSONFF() (ff FeatureCollection, err error) {
+	ff = FeatureCollection{}
+	ff.Type = "FeatureCollection"
+	var features []Feature
+	for _, coords := range mp.C {
+		polygon := Polygon{}
+		polygon.Type = "Polygon"
+		polygon.C = coords
+		f := Feature{}
+		f.Type = "Feature"
+		f.Geometry = polygon
+		f.Properties = make(Prop)
+		features = append(features, f)
+	}
+	ff.Feat = features
+	return ff, nil
+}
+
+// AddFeatureProp adds a prop with key/value to i-th feature
+// safe for concurrent access
+func (ff *FeatureCollection) AddFeatureProp(i int, key string, value interface{}) {
+	ff.mu.Lock()
+	f := ff.Feat[i]
+	f.addFeature(key, value)
+	ff.mu.Unlock()
+}
+
 // ToGeoJSON converts back a multipolygon to geoJSON
 func (mp MultiPolygon) ToGeoJSON(precision int) (ff FeatureCollection, err error) {
 	in, loops, err := mp.ToS2(precision)
@@ -410,9 +456,11 @@ func (mp MultiPolygon) ToGeoJSON(precision int) (ff FeatureCollection, err error
 		}
 	}
 	//add bbox
-	for i, inner := range loops {
-		bbox := boundingbox(inner, i)
-		features = append(features, bbox)
+	if bbox {
+		for i, inner := range loops {
+			bbox := boundingbox(inner, i)
+			features = append(features, bbox)
+		}
 	}
 	ff.Feat = features
 	return
