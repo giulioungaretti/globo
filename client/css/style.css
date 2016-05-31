@@ -1,0 +1,101 @@
+body {
+    box-sizing: border-box;
+    font-family: Lato;
+}
+
+#app {
+    display: block;
+    width: 100%;
+    margin: 0 auto;
+}
+
+.form {
+    display: inline-block;
+    width: 100%;
+}
+
+.flexbox-container {
+    display: flex;
+}
+
+.flexbox-container > div {
+	width: 20%;
+	padding: 20px;
+}
+
+.flexbox-container > .map-container {
+    flex:1;
+}
+
+.form__date,
+.form__text,
+.form__precision {
+    padding: 0.5em 0.25em;
+    margin: 0.5em 0;
+    border: 0;
+    border-bottom: 2px solid #00BCD4;
+}
+
+.form__date:focus,
+.form__text:focus,
+.form__precision:focus,
+.form__submit:focus {
+    outline: none;
+}
+
+.form__date {
+    display: inline-block;
+    width: 100%;
+}
+
+.form__text {
+    display: inline-block;
+    width: 100%;
+    clear: both;
+}
+
+.form__precision {
+    display: inline-block;
+    width: 100%;
+    clear: both;
+}
+
+.form__submit {
+    border: 0;
+    padding: 0.75em;
+    background: #00BCD4;
+    margin: 0.5em 0;
+    display: inline-block;
+    clear: both;
+    color: #000;
+    width: 100%;
+}
+
+.map {
+    display: inline-block;
+    height:500px;
+    width: 100%;
+    margin: 1em 0;
+    box-shadow: 0 3px 6px rgba(0,0,0,0.16), 0 3px 6px rgba(0,0,0,0.23);
+}
+
+.info {
+    aligin:left;
+    padding: 0.75em;
+    margin: 0.5em 0;
+    display: inline-block;
+    color: #607d8b;
+    background: rgba(255, 255, 255, 0.65);
+    position:absolute;
+    width: 100%;
+    top: 0;
+    right: 0;
+}
+
+.info>h1{
+    color: #00BCD4;
+}
+
+.flexbox-container > .hero {
+    flex:1;
+}
